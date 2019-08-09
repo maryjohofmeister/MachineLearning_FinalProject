@@ -1,0 +1,168 @@
+---
+title: "Machine Learning Final Project"
+output: html_document
+---
+
+##Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. The goal of this project is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+##Data
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+##The R Code and Results
+
+Libraries and Data Import:
+```{r}
+library(randomForest)
+library(gbm)
+library(dplyr)
+library(kernlab)
+library(caret)
+library(corrplot)
+library(rattle)
+library(rpart)
+library(rmarkdown)
+library(knitr)
+
+trainUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+dat <- read.csv(url(trainUrl), na.strings=c("NA","#DIV/0!",""))
+datTest <- read.csv(url(testUrl), na.strings=c("NA","#DIV/0!",""))
+
+#Descriptive Statistics of the classe variable (and factorization)
+dat$classef <- factor(dat$classe)
+```
+
+```{r, echo=FALSE}
+histogram(dat$classef, dat)
+```
+
+##Data Preparation Steps
+
+Here I clean and preprocess the data. I remove the the varables that have no logical relationship to classe and also those with low correlation or non-zero variance.
+
+```{r}
+#Data Cleaning and Preprocess
+
+#Remove Date and Name Vars as these should not impact Classe
+trainData <- dat[, -c(1:7)]
+
+#Partition training dataset into initial training and testing
+
+set.seed(1234) 
+inTrain <- createDataPartition(trainData$classef, p = 0.7, list = FALSE)
+trainData <- trainData[inTrain, ]
+testData <- trainData[-inTrain, ]
+dim(trainData)
+
+#Removing the variables with low variance to help improve prediction
+
+nsv<-nearZeroVar(trainData)
+
+trainData <- trainData[, -nsv]
+testData  <- testData[, -nsv]
+dim(trainData)
+
+#Clean out all variables without data
+trainData<- trainData[, colSums(is.na(trainData)) == 0]
+testData<- testData[, colSums(is.na(testData)) == 0]
+dim(trainData)
+```
+##Moving on to Model Building
+
+Here I try three types of models to see which will have the best predictive value. The first is Decision Tree, the second is GBM and the third is Random Forest.  
+
+##Decision Tree
+```{r}
+
+#Trying Classification Trees Model
+
+set.seed(12345)
+decisionTreeMod <- rpart(classef ~ ., data=trainData[,-53], method="class")
+fancyRpartPlot(decisionTreeMod)
+
+#Look at most influential variables
+#Top 4:   roll_belt         accel_belt_z           pitch_belt        pitch_forearm 
+summary(decisionTreeMod)
+
+#Confusion Matrix - Looks at the predictive value of the model. Calculates Sens, Spec Etc..
+# Here we use the model built on the training set to predict the class for test set data
+#Sensitivity was highest for Class A and C
+
+predictTreeMod <- predict(decisionTreeMod, testData, type = "class")
+cmtree <- confusionMatrix(predictTreeMod, testData$classe)
+cmtree
+
+
+#Plot of the Accuracy of the Model to Predict the Classe Variable in the Test Set
+#Overall Accuracy is 76%, which is not bad IMO.
+#Out of Sample Error is 24%
+
+plot(cmtree$table, col = cmtree$byClass, 
+     main = paste("Decision Tree - Accuracy =", round(cmtree$overall['Accuracy'], 4)))
+```
+
+For Decision Tree, the overall accurary was 76% and the out of sample error was 24%(.24).  Let's compare to other types of models:
+
+##GBM
+```{r}
+#Try GBM
+#
+d<-trainData [,-53]
+set.seed(1234)
+cGM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modelGM  <- train(classef ~ ., data=d, method = "gbm", trControl = cGM, verbose = FALSE)
+modelGM$finalModel
+
+#A gradient boosted model with multinomial loss function.
+#150 iterations were performed.
+#There were 52 predictors of which 52 had non-zero influence.
+
+predictGM <- predict(modelGM, newdata=testData[,-53])
+cmGM <- confusionMatrix(predictGM, testData$classef)
+cmGM
+plot(cmGM$table, col = cmGM$byClass, main = paste("GBM Confusion Matrix: Accuracy =", round(cmGM$overall['Accuracy'], 4)))
+#Accuracy of 98%, slightly lower than RF Model, but still very good result
+```
+Accuracy of 98% is much better than Decision Tree Model. 
+
+Let's try one more for kicks:
+
+##Random Forest Model
+
+```{r}
+RF <- trainControl(method="cv", number=3, verboseIter=FALSE)
+modelRF <- train(classef ~ ., data=d, method="rf", trControl=RF)
+modelRF$finalModel
+summary (modelRF)
+
+#Use the RF model to predict the test data
+#Perfect Sens/Spec/Accuracy- This might be overfitting?? Obviously a better model then decision tree. 
+
+
+predictRF <- predict(modelRF, newdata=testData[,-53])
+cmrf <- confusionMatrix(predictRF, testData$classef)
+cmrf
+#Really nice plot looking at accuracy in test set. Very high predictive value
+plot(cmrf$table, col = cmrf$byClass, main = paste("Random Forest Confusion Matrix: Accuracy =", round(cmrf$overall['Accuracy'], 4)))
+
+```
+The RF model has perfect Sens/Spec/Accuracy- This might be overfitting, but it is an improvement over decision tree and GBM. 
+
+I will use the RF model for the quiz. But, I will note that both the GBM and the RF had the same predictions for the final test dataset:
+
+
+```{r}
+ResultsRF <- predict(modelRF, newdata=datTest)
+ResultsRF
+```
